@@ -1,0 +1,48 @@
+%% Workload and Reservation state machines
+%% University AI Compute Management Platform (friday-compute)
+%% SPEC CAP-1 (admission outcomes), CAP-5, CAP-6, CAP-8, CAP-10 and ARCH AD-8
+stateDiagram-v2
+
+    state "Workload lifecycle" as W {
+        [*] --> REQUESTED : user submits (CAP-1)
+        REQUESTED --> REJECTED : one named rejection reason (CAP-1)
+        REQUESTED --> QUEUED : hardware exists but busy (CAP-1)
+        REQUESTED --> PENDING_REVIEW : needs a human decision (CAP-1)
+        REQUESTED --> SCHEDULED : admitted, capacity free (EXECUTING)
+        QUEUED --> SCHEDULED : reached front of queue, capacity free
+        QUEUED --> QUEUED : re-inserted at front after a node failure (CAP-10)
+        PENDING_REVIEW --> SCHEDULED : approved
+        PENDING_REVIEW --> REJECTED : denied
+        SCHEDULED --> ACTIVE : placed on an equivalent-or-better node (CAP-4, CAP-7)
+        ACTIVE --> COMPLETED : run finished
+        ACTIVE --> FAILED : unrecoverable error, or node failure with no qualifying node (CAP-10)
+        ACTIVE --> PREEMPTED : reservation window start and relocation found no node (CAP-6)
+        REJECTED --> [*]
+        COMPLETED --> [*]
+        FAILED --> [*]
+        PREEMPTED --> [*]
+    }
+
+    state "Reservation lifecycle" as R {
+        [*] --> RequestReceived : instructor requests a hardware class for a window (CAP-5)
+        RequestReceived --> GRANTED : an interchangeable capacity slot is free for the window (AD-6)
+        RequestReceived --> SUBSTITUTE_OFFERED : exact class unavailable, equivalent-or-better node free (CAP-7)
+        RequestReceived --> RESV_PENDING_ADMIN : neither available (CAP-5)
+        SUBSTITUTE_OFFERED --> GRANTED : instructor accepts the substitute
+        SUBSTITUTE_OFFERED --> RESV_PENDING_ADMIN : instructor declines
+        RESV_PENDING_ADMIN --> GRANTED : admin approves
+        RESV_PENDING_ADMIN --> DECLINED : admin denies
+        GRANTED --> WINDOW_ACTIVE : window start, non-reserved work relocated then preempted (CAP-6)
+        WINDOW_ACTIVE --> CLOSED : window end, hardware released
+        CLOSED --> [*]
+        DECLINED --> [*]
+    }
+
+    note right of W
+        Relocation (CAP-6 preemption-avoidance and CAP-10 node failure, ARCH AD-8)
+        moves a workload to an equivalent-or-better node while it stays ACTIVE.
+        Relocation is NOT a state transition.
+        QUEUED and PENDING_REVIEW are CAP-1 admission outcomes. The CAP-8 lifecycle
+        proper is REQUESTED, SCHEDULED, ACTIVE, PREEMPTED, COMPLETED, FAILED.
+        PREEMPTED, COMPLETED and FAILED are terminal and non-resumable.
+    end note

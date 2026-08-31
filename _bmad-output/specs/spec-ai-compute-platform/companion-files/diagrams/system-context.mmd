@@ -1,0 +1,78 @@
+%% System Context and Container view (C4 level 2)
+%% University AI Compute Management Platform (friday-compute)
+%% Solid arrows = synchronous governance plane. Dotted arrows = asynchronous telemetry plane (ARCH AD-9).
+flowchart TB
+    subgraph actors["Actors (role tiers, SPEC CAP-3)"]
+        student["Student"]
+        instructor["Instructor"]
+        researcher["Researcher"]
+        operator["Operator"]
+        admin["Administrator"]
+    end
+
+    subgraph upstream["Upstream systems (consumed, not built here)"]
+        oidc["OIDC Identity Provider<br/>SPEC NG-9"]
+        schedule["Academic context membership<br/>and class schedule source<br/>SPEC NG-10, A-3"]
+        serving["LLM Serving Layer<br/>token counters, SPEC C-9"]
+    end
+
+    subgraph control["Control plane — isolated server infra (SPEC A-11)"]
+        gw["API Gateway / Auth Proxy<br/>no domain state"]
+        core["Governance Core (hexagonal)<br/>admission, quota, scoping,<br/>placement, equivalent-or-better"]
+        resv["Reservation Coordinator<br/>CAP-5, CAP-6"]
+        bridge["Placement / Scheduler Bridge<br/>CAP-8, CAP-10, relocateOrElse"]
+        usage["Usage and Audit Service<br/>CAP-11, CAP-12"]
+        pg[("PostgreSQL<br/>governance source of truth<br/>ARCH AD-3")]
+    end
+
+    subgraph telemetry["Telemetry plane — asynchronous (ARCH AD-9)"]
+        ingest["Telemetry Ingestion Engine<br/>node health state, CAP-9"]
+        tsdb[("Metrics store<br/>Prometheus + DCGM exporter")]
+    end
+
+    bus{{"Event Bus — NATS JetStream"}}
+
+    subgraph clusterk8s["Kubernetes cluster"]
+        adapter["Kubeflow / K8s Adapter<br/>only component touching the cluster"]
+        k8s["Kubernetes API<br/>plus NVIDIA device plugins<br/>SPEC C-2"]
+        trainer["Kubeflow Trainer v2<br/>TrainJob CRD, ARCH AD-12"]
+        fleet[("GPU fleet: many 24GB nodes<br/>plus one 2x48GB node<br/>student lab, SPEC C-1, C-12")]
+    end
+
+    student -->|"REST/JSON"| gw
+    instructor -->|"REST/JSON"| gw
+    researcher -->|"REST/JSON"| gw
+    operator -->|"REST/JSON"| gw
+    admin -->|"REST/JSON"| gw
+
+    gw -->|"OIDC"| oidc
+    gw -->|"gRPC"| core
+    core -->|"SQL serializable"| pg
+    usage -->|"SQL read ledger, append audit"| pg
+
+    core -->|"gRPC"| resv
+    core -->|"gRPC"| bridge
+    resv -->|"gRPC: equivalent-or-better (CAP-7)"| core
+    bridge -->|"gRPC: equivalent-or-better (CAP-7)"| core
+
+    resv -->|"Reservation CRD reconcile"| adapter
+    bridge -->|"pod specs, GovernedWorkload CRD"| adapter
+    adapter -->|"client-go"| k8s
+    adapter -->|"TrainJob"| trainer
+    trainer --> k8s
+    k8s -->|"schedule pods"| fleet
+
+    schedule -->|"membership, schedule"| resv
+
+    serving -.->|"raw token counters"| bus
+    fleet -.->|"GPU / DCGM metrics"| tsdb
+    k8s -.->|"node conditions"| bus
+    tsdb -.-> ingest
+    bus -.-> ingest
+    ingest -.->|"node.failing, node health"| bus
+    bus -.->|"node.failing"| bridge
+    bus -.->|"reservation.window.opening"| bridge
+    bus -.->|"workload.tokens.finalized"| core
+    core -.->|"domain events via outbox (ARCH AD-10)"| bus
+    resv -.->|"reservation.window.opening"| bus
+    usage -.->|"consume outbox stream"| bus
